@@ -1,0 +1,9 @@
+streamlit
+opencv-python-headless
+pillow
+pandas
+numpy
+spotipy
+python-dotenv
+fer
+mtcnn
