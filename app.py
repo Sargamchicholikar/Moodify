@@ -1,6 +1,6 @@
 """
-Moodify - Fixed Emotion Detection System
-Properly detects Happy, Neutral, and Sad emotions
+Moodify - Dynamic Song Recommendations
+Different songs every time, no repetition
 """
 
 import cv2
@@ -432,6 +432,24 @@ HTML_TEMPLATE = """
             font-weight: 600;
         }
 
+        .refresh-btn {
+            background: var(--warning);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-bottom: 16px;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+        }
+
         @media (max-width: 968px) {
             .main-grid {
                 grid-template-columns: 1fr;
@@ -469,7 +487,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="header">
             <h1>🎵 Moodify</h1>
-            <p>Dynamic Bollywood Music Based on Your Emotions</p>
+            <p>Dynamic Bollywood Music - New Songs Every Time!</p>
         </div>
 
         <div class="status-bar">
@@ -491,9 +509,9 @@ HTML_TEMPLATE = """
                         </label>
                     </div>
                     <div class="setting-item">
-                        <span class="setting-label">Show Face Overlay</span>
+                        <span class="setting-label">Never Repeat Songs</span>
                         <label class="switch">
-                            <input type="checkbox" id="overlaySwitch" checked>
+                            <input type="checkbox" id="noRepeatSwitch" checked>
                             <span class="switch-slider"></span>
                         </label>
                     </div>
@@ -552,6 +570,10 @@ HTML_TEMPLATE = """
                     Waiting for emotion detection...
                 </div>
 
+                <button class="refresh-btn" onclick="app.refreshSongs()">
+                    🔄 Get New Songs
+                </button>
+
                 <div class="youtube-player">
                     <iframe id="youtubePlayer" 
                             width="100%" 
@@ -582,6 +604,7 @@ HTML_TEMPLATE = """
                 this.isDetecting = false;
                 this.currentEmotion = null;
                 this.currentSongs = [];
+                this.playedSongs = new Set(); // Track played songs
                 this.video = document.getElementById('videoFeed');
                 this.canvas = document.getElementById('canvas');
                 this.ctx = this.canvas.getContext('2d');
@@ -688,10 +711,24 @@ HTML_TEMPLATE = """
                 this.ctx.drawImage(this.video, 0, 0, 640, 480);
                 const imageData = this.canvas.toDataURL('image/jpeg', 0.7);
                 
-                this.socket.emit('process_frame', { image: imageData });
+                const noRepeat = document.getElementById('noRepeatSwitch').checked;
                 
-                // Process at 5 FPS for stability
+                this.socket.emit('process_frame', { 
+                    image: imageData,
+                    played_songs: noRepeat ? Array.from(this.playedSongs) : []
+                });
+                
                 setTimeout(() => this.captureLoop(), 200);
+            }
+
+            refreshSongs() {
+                if (this.currentEmotion) {
+                    this.showToast('Getting new songs...');
+                    this.socket.emit('refresh_songs', { 
+                        emotion: this.currentEmotion,
+                        played_songs: Array.from(this.playedSongs)
+                    });
+                }
             }
 
             updateEmotionDisplay(data) {
@@ -747,6 +784,9 @@ HTML_TEMPLATE = """
                 const song = this.currentSongs[index];
                 if (!song) return;
                 
+                // Track played song
+                this.playedSongs.add(song.videoId);
+                
                 // Update playing state
                 document.querySelectorAll('.song-item').forEach((item, i) => {
                     item.classList.toggle('playing', i === index);
@@ -799,7 +839,7 @@ class ImprovedEmotionDetector:
         self.smile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile.xml')
         
         # Tracking variables
-        self.emotion_history = deque(maxlen=30)  # Longer history for better detection
+        self.emotion_history = deque(maxlen=30)
         self.face_history = deque(maxlen=10)
         self.current_emotion = 'neutral'
         self.last_emotion_change = time.time()
@@ -882,27 +922,21 @@ class ImprovedEmotionDetector:
         smiles = self.smile_cascade.detectMultiScale(lower_face, 1.5, 5, minSize=(25, 25))
         
         # Analyze brightness patterns
-        upper_brightness = np.mean(gray_face[:h//3])  # Forehead area
-        middle_brightness = np.mean(gray_face[h//3:2*h//3])  # Eye area
-        lower_brightness = np.mean(gray_face[2*h//3:])  # Mouth area
+        upper_brightness = np.mean(gray_face[:h//3])
+        middle_brightness = np.mean(gray_face[h//3:2*h//3])
+        lower_brightness = np.mean(gray_face[2*h//3:])
         
         # Analyze color information
         hsv = cv2.cvtColor(color_face, cv2.COLOR_BGR2HSV)
         avg_saturation = np.mean(hsv[:, :, 1])
         avg_value = np.mean(hsv[:, :, 2])
         
-        # Calculate edge density (wrinkles, expression lines)
+        # Calculate edge density
         edges = cv2.Canny(gray_face, 50, 150)
         edge_density = np.sum(edges > 0) / (h * w)
         
-        # Emotion scoring based on features
-        
-        # HAPPY Detection:
-        # - Smiles detected
-        # - Bright lower face (smile)
-        # - High saturation (flushed/warm)
+        # HAPPY Detection
         if len(smiles) > 0 or (lower_brightness > middle_brightness + 10):
-            # Strong indicators of happiness
             if len(smiles) > 0 and lower_brightness > middle_brightness:
                 return 'happy'
             elif avg_saturation > 100 and lower_brightness > 100:
@@ -910,54 +944,42 @@ class ImprovedEmotionDetector:
             elif edge_density < 0.05 and lower_brightness > upper_brightness:
                 return 'happy'
         
-        # SAD Detection:
-        # - No smiles
-        # - Darker overall
-        # - Lower face darker than upper (frown)
-        # - More edge density (furrowed brow)
+        # SAD Detection
         if (len(smiles) == 0 and 
             lower_brightness < upper_brightness - 5 and
             avg_value < 100):
             return 'sad'
         
         if (edge_density > 0.08 and 
-            len(eyes) < 2 and  # Eyes possibly closed/squinted
+            len(eyes) < 2 and
             len(smiles) == 0):
             return 'sad'
         
-        # Additional sad indicators
-        if (middle_brightness < upper_brightness - 10 and  # Dark around eyes
+        if (middle_brightness < upper_brightness - 10 and
             lower_brightness < middle_brightness):
             return 'sad'
         
-        # NEUTRAL Detection:
-        # - Balanced brightness
-        # - No strong features
-        # - Medium edge density
+        # NEUTRAL Detection
         brightness_variance = np.std([upper_brightness, middle_brightness, lower_brightness])
         
-        if brightness_variance < 15:  # Even lighting across face
+        if brightness_variance < 15:
             if len(eyes) >= 2 and len(smiles) == 0:
                 return 'neutral'
         
-        # Default logic with time-based variation
-        # This ensures all emotions get detected over time
+        # Time-based variation for better distribution
         time_factor = int(time.time()) % 30
         
         if time_factor < 10:
-            # Bias toward happy in first third
             if lower_brightness > middle_brightness or len(smiles) > 0:
                 return 'happy'
         elif time_factor < 20:
-            # Bias toward neutral in middle third
             if brightness_variance < 20:
                 return 'neutral'
         else:
-            # Bias toward sad in last third
             if lower_brightness < middle_brightness or edge_density > 0.06:
                 return 'sad'
         
-        # Final fallback with rotation
+        # Rotate through emotions
         emotions = ['happy', 'neutral', 'sad']
         return emotions[self.frame_count % 3]
     
@@ -966,16 +988,12 @@ class ImprovedEmotionDetector:
         if len(self.emotion_history) < 5:
             return self.current_emotion
         
-        # Count recent emotions
         recent = list(self.emotion_history)[-10:]
         emotion_counts = Counter(recent)
         
-        # Get most common
         most_common = emotion_counts.most_common(1)[0]
         
-        # Need at least 60% consistency to change
         if most_common[1] >= len(recent) * 0.6:
-            # Check time delay
             if time.time() - self.last_emotion_change > 3:
                 if most_common[0] != self.current_emotion:
                     self.current_emotion = most_common[0]
@@ -985,7 +1003,7 @@ class ImprovedEmotionDetector:
         return self.current_emotion
     
     def set_manual_emotion(self, emotion: str):
-        """Manually set emotion (for testing)"""
+        """Manually set emotion"""
         self.manual_emotion = emotion
         self.manual_emotion_time = time.time()
         self.current_emotion = emotion
@@ -997,96 +1015,225 @@ class ImprovedEmotionDetector:
             'face_detected': False
         }
 
-class YouTubeMusic:
-    """YouTube music search"""
+class DynamicYouTubeMusic:
+    """100% Dynamic YouTube music search - no predefined songs"""
     
     def __init__(self):
-        self.cache = {}
+        # Dynamic search components
+        self.search_count = 0
+        self.used_queries = set()  # Track used queries to avoid repetition
         
-    def search_songs(self, emotion: str) -> List[Dict]:
-        """Search for songs based on emotion"""
+        # Dynamic components for building queries
+        self.years = ['2024', '2023', '2022', '2021', '2020', 'latest', 'new']
+        self.quality = ['best', 'top', 'superhit', 'blockbuster', 'hit', 'popular', 'trending', 'viral']
         
-        # Use cache if available
-        if emotion in self.cache:
-            return self.cache[emotion]
+        self.happy_keywords = [
+            'party', 'dance', 'celebration', 'wedding', 'dhol', 'club', 'energetic', 
+            'upbeat', 'festive', 'garba', 'bhangra', 'item', 'peppy', 'fun', 'disco'
+        ]
         
-        queries = {
-            'happy': 'bollywood party dance songs 2024 latest',
-            'neutral': 'bollywood romantic melody songs 2024 new',
-            'sad': 'bollywood sad emotional songs 2024 latest'
-        }
+        self.neutral_keywords = [
+            'romantic', 'love', 'melody', 'soulful', 'beautiful', 'soft', 'sweet',
+            'heart touching', 'couple', 'rain', 'monsoon', 'sufi', 'ghazal', 'unplugged'
+        ]
         
-        query = queries.get(emotion, queries['neutral'])
+        self.sad_keywords = [
+            'sad', 'emotional', 'breakup', 'separation', 'pain', 'crying', 'heartbreak',
+            'bewafa', 'judaai', 'tears', 'alone', 'missing', 'yaad', 'tanhai'
+        ]
+        
+        self.artists = [
+            'arijit singh', 'atif aslam', 'shreya ghoshal', 'jubin nautiyal',
+            'neha kakkar', 'badshah', 'yo yo honey singh', 'armaan malik',
+            'darshan raval', 'b praak', 'tulsi kumar', 'dhvani bhanushali'
+        ]
+        
+        self.movies = [
+            'animal', 'jawan', 'pathaan', 'rocky aur rani', 'tu jhoothi main makkaar',
+            'brahmastra', 'bhediya', 'bhool bhulaiyaa', 'kabir singh', 'kesari'
+        ]
+        
+    def search_songs(self, emotion: str, played_songs: List[str] = []) -> List[Dict]:
+        """Generate completely dynamic search query and get songs"""
+        
+        # Build a unique dynamic query
+        query = self._generate_dynamic_query(emotion)
+        
+        logger.info(f"Dynamic search: {query}")
         
         try:
-            songs = self._search(query)
-            self.cache[emotion] = songs
-            return songs
-        except:
-            return self._fallback_songs(emotion)
-    
-    def _search(self, query: str) -> List[Dict]:
-        """Search YouTube"""
-        try:
-            encoded = urllib.parse.quote(query)
-            url = f"https://www.youtube.com/results?search_query={encoded}"
+            songs = self._search_youtube(query, played_songs)
+            self.search_count += 1
             
-            headers = {'User-Agent': 'Mozilla/5.0'}
+            # If not enough songs, try another query
+            if len(songs) < 5:
+                query = self._generate_dynamic_query(emotion)
+                additional_songs = self._search_youtube(query, played_songs)
+                songs.extend(additional_songs)
+            
+            return songs[:10]
+        except Exception as e:
+            logger.error(f"Search error: {e}")
+            # Try one more time with a different query
+            try:
+                query = self._generate_dynamic_query(emotion)
+                return self._search_youtube(query, played_songs)[:10]
+            except:
+                return []
+    
+    def _generate_dynamic_query(self, emotion: str) -> str:
+        """Generate a completely unique search query"""
+        
+        # Choose random components
+        year = random.choice(self.years)
+        quality_word = random.choice(self.quality)
+        
+        # Build query based on emotion
+        if emotion == 'happy':
+            keyword = random.choice(self.happy_keywords)
+            # Sometimes add artist for variety
+            if random.random() > 0.7:
+                artist = random.choice(['neha kakkar', 'badshah', 'yo yo honey singh', 'mika singh'])
+                query = f"{artist} {keyword} bollywood songs {year}"
+            # Sometimes add movie
+            elif random.random() > 0.5:
+                movie = random.choice(self.movies)
+                query = f"{movie} {keyword} songs bollywood"
+            else:
+                query = f"bollywood {keyword} songs {year} {quality_word}"
+        
+        elif emotion == 'sad':
+            keyword = random.choice(self.sad_keywords)
+            # Higher chance of artist for sad songs
+            if random.random() > 0.5:
+                artist = random.choice(['arijit singh', 'atif aslam', 'b praak', 'jubin nautiyal'])
+                query = f"{artist} {keyword} bollywood songs {year}"
+            else:
+                query = f"bollywood {keyword} songs {year} hindi {quality_word}"
+        
+        else:  # neutral
+            keyword = random.choice(self.neutral_keywords)
+            if random.random() > 0.6:
+                artist = random.choice(['arijit singh', 'shreya ghoshal', 'armaan malik', 'darshan raval'])
+                query = f"{artist} {keyword} bollywood {year}"
+            elif random.random() > 0.4:
+                movie = random.choice(self.movies)
+                query = f"{movie} {keyword} songs"
+            else:
+                query = f"bollywood {keyword} songs {year} {quality_word}"
+        
+        # Add random suffix sometimes
+        suffixes = ['hd', 'official', 'full song', 'video song', 'lyrical', 'audio']
+        if random.random() > 0.7:
+            query += f" {random.choice(suffixes)}"
+        
+        # Make sure we don't repeat the exact same query
+        attempts = 0
+        while query in self.used_queries and attempts < 10:
+            # Modify query slightly
+            query = query + f" {random.choice(['mix', 'jukebox', 'playlist', 'collection'])}"
+            attempts += 1
+        
+        self.used_queries.add(query)
+        
+        return query
+    
+    def _search_youtube(self, query: str, played_songs: List[str]) -> List[Dict]:
+        """Search YouTube dynamically"""
+        try:
+            # Add some randomization to the search URL itself
+            sort_options = ['relevance', 'rating', 'viewCount', 'date']
+            sort_by = random.choice(sort_options)
+            
+            encoded = urllib.parse.quote(query)
+            url = f"https://www.youtube.com/results?search_query={encoded}&sp={self._get_filter_param(sort_by)}"
+            
+            headers = {
+                'User-Agent': f'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/{random.randint(500, 599)}.36',
+                'Accept-Language': 'en-US,en;q=0.9,hi;q=0.8'
+            }
+            
             req = urllib.request.Request(url, headers=headers)
-            response = urllib.request.urlopen(req, timeout=5)
+            response = urllib.request.urlopen(req, timeout=10)
             html = response.read().decode('utf-8')
             
-            # Extract video IDs and titles
-            video_ids = re.findall(r'"videoId":"([^"]+)"', html)[:10]
-            titles = re.findall(r'"title":{"runs":\[{"text":"([^"]+)"', html)[:10]
+            # Extract video data with better regex
+            video_pattern = r'"videoId":"([^"]+)".*?"title":{"runs":\[{"text":"([^"]+)"'
+            matches = re.findall(video_pattern, html)
+            
+            # Also try alternate pattern
+            if len(matches) < 10:
+                video_ids = re.findall(r'"videoId":"([^"]+)"', html)
+                titles = re.findall(r'"title":{"runs":\[{"text":"([^"]+)"', html)
+                matches = list(zip(video_ids, titles))
             
             songs = []
-            for i in range(min(len(video_ids), 10)):
-                vid_id = video_ids[i]
-                title = titles[i] if i < len(titles) else f'Song {i+1}'
-                title = title.replace('\\u0026', '&')[:60]
+            seen_ids = set(played_songs)
+            
+            for vid_id, title in matches:
+                # Skip if already played or seen in this batch
+                if vid_id in seen_ids:
+                    continue
+                
+                # Clean title
+                title = self._clean_title(title)
+                
+                # Skip non-music content
+                if any(skip in title.lower() for skip in ['news', 'interview', 'making', 'behind']):
+                    continue
                 
                 songs.append({
                     'videoId': vid_id,
                     'title': title,
                     'thumbnail': f'https://img.youtube.com/vi/{vid_id}/mqdefault.jpg'
                 })
+                
+                seen_ids.add(vid_id)
+                
+                if len(songs) >= 15:  # Get extra to ensure we have 10 good ones
+                    break
             
-            return songs if songs else self._fallback_songs('neutral')
+            # Shuffle for variety
+            random.shuffle(songs)
+            
+            return songs[:10]
             
         except Exception as e:
-            logger.error(f"Search error: {e}")
-            return self._fallback_songs('neutral')
+            logger.error(f"YouTube search error: {e}")
+            return []
     
-    def _fallback_songs(self, emotion: str) -> List[Dict]:
-        """Fallback songs if search fails"""
-        songs = {
-            'happy': [
-                ('l_MyUGq7pgs', 'Malhari'),
-                ('jCEdTq3j-0U', 'Gallan Goodiyaan'),
-                ('NTHz9ephYTw', 'Kar Gayi Chull')
-            ],
-            'neutral': [
-                ('IJq0yyWug1k', 'Tum Hi Ho'),
-                ('tVMAQAsjsOU', 'Kal Ho Naa Ho'),
-                ('bzSTpdcs-EI', 'Pehla Nasha')
-            ],
-            'sad': [
-                ('284Ov7ysmfA', 'Channa Mereya'),
-                ('jHNNMj5bNQw', 'Kabira'),
-                ('sK7riqg2mr4', 'Agar Tum Saath Ho')
-            ]
+    def _get_filter_param(self, sort_by: str) -> str:
+        """Get YouTube filter parameter"""
+        filters = {
+            'relevance': 'EgIQAQ%3D%3D',
+            'rating': 'CAASAhAB',
+            'viewCount': 'CAMSAhAB',
+            'date': 'CAISAhAB'
         }
+        return filters.get(sort_by, '')
+    
+    def _clean_title(self, title: str) -> str:
+        """Clean and format title"""
+        # Unescape HTML entities
+        replacements = {
+            '\\u0026': '&',
+            '&amp;': '&',
+            '&quot;': '"',
+            '&#39;': "'",
+            '\\': ''
+        }
+        for old, new in replacements.items():
+            title = title.replace(old, new)
         
-        return [{
-            'videoId': vid,
-            'title': title,
-            'thumbnail': f'https://img.youtube.com/vi/{vid}/mqdefault.jpg'
-        } for vid, title in songs.get(emotion, songs['neutral'])]
+        # Limit length
+        if len(title) > 60:
+            title = title[:57] + '...'
+        
+        return title.strip()
 
 # Global instances
 detector = ImprovedEmotionDetector()
-youtube = YouTubeMusic()
+youtube = DynamicYouTubeMusic()
 current_emotion = None
 
 # Flask routes
@@ -1104,6 +1251,9 @@ def handle_connect():
 def handle_frame(data):
     global current_emotion
     
+    # Get played songs from client
+    played_songs = data.get('played_songs', [])
+    
     # Process frame
     result = detector.process_frame(data['image'])
     
@@ -1111,14 +1261,14 @@ def handle_frame(data):
     if result.get('emotion') and result['emotion'] != current_emotion:
         current_emotion = result['emotion']
         
-        # Search for songs
-        emit('status_message', {'message': f'Loading {current_emotion} music...'})
-        songs = youtube.search_songs(current_emotion)
+        # Search for new songs (different each time)
+        emit('status_message', {'message': f'Finding new {current_emotion} songs...'})
+        songs = youtube.search_songs(current_emotion, played_songs)
         
         result['songs'] = songs
         emit('status_message', {'message': 'Ready'})
         
-        logger.info(f"Emotion: {current_emotion}, Songs: {len(songs)}")
+        logger.info(f"Emotion: {current_emotion}, New songs: {len(songs)}")
     
     emit('emotion_update', result)
 
@@ -1129,8 +1279,23 @@ def handle_manual_emotion(data):
     if emotion in ['happy', 'neutral', 'sad']:
         detector.set_manual_emotion(emotion)
         
-        # Get songs for this emotion
-        songs = youtube.search_songs(emotion)
+        # Get new songs for this emotion
+        songs = youtube.search_songs(emotion, [])
+        
+        emit('emotion_update', {
+            'emotion': emotion,
+            'face_detected': True,
+            'songs': songs
+        })
+
+@socketio.on('refresh_songs')
+def handle_refresh_songs(data):
+    """Get new songs for current emotion"""
+    emotion = data.get('emotion')
+    played_songs = data.get('played_songs', [])
+    
+    if emotion in ['happy', 'neutral', 'sad']:
+        songs = youtube.search_songs(emotion, played_songs)
         
         emit('emotion_update', {
             'emotion': emotion,
@@ -1142,13 +1307,13 @@ if __name__ == '__main__':
     port = 5000
     logger.info(f"""
     ╔════════════════════════════════════╗
-    ║         MOODIFY - FIXED            ║
-    ║   All 3 Emotions Now Detected!     ║
+    ║      MOODIFY - DYNAMIC SONGS       ║
+    ║   New Songs Every Time! No Repeats ║
     ╠════════════════════════════════════╣
-    ║  • Happy, Neutral, Sad Detection   ║
-    ║  • No percentages - Clean UI       ║
-    ║  • Manual emotion override         ║
-    ║  • Dynamic YouTube search          ║
+    ║  • Different songs each search     ║
+    ║  • 10+ query variations per mood   ║
+    ║  • Avoids played songs             ║
+    ║  • Manual refresh button           ║
     ╠════════════════════════════════════╣
     ║  URL: http://localhost:{port}        ║
     ╚════════════════════════════════════╝
