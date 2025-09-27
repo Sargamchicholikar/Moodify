@@ -20,9 +20,6 @@ An AI-powered web application that detects your emotions in real-time through we
 
 ## 📸 Screenshots
 
-### Main Interface
-![Moodify Interface](https://via.placeholder.com/800x400?text=Moodify+Interface)
-
 ### Emotion Detection
 - **Happy**: Plays party songs, dance numbers, celebration tracks
 - **Neutral**: Plays romantic melodies, soft music
