@@ -163,9 +163,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📧 Contact
 
-Sargam - [@yourusername](https://github.com/yourusername)
+Sargam - [@yourusername](https://github.com/Sargamchicholikar)
 
-Project Link: [https://github.com/yourusername/moodify](https://github.com/yourusername/moodify)
+Project Link: [https://github.com/yourusername/moodify](https://github.com/Sargamchicholikar/moodify)
 
 ## 🌐 Future Enhancements
 
